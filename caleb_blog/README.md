@@ -4,7 +4,7 @@ A minimal Go blog with writer/viewer roles.
 
 ## Requirements
 
-- Go 1.23+
+- Go 1.24+
 
 ## How to Run
 
@@ -31,6 +31,6 @@ Protected routes use HTTP Basic Auth.
 - **Username:** `writer`
 - **Password:** `password123`
 
-## Note
+## Storage
 
-Uses in-memory storage. All data is lost on restart.
+Uses SQLite for persistence. Data is stored in `blog.db`.
