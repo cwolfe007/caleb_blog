@@ -7,7 +7,8 @@ import (
 )
 
 func main() {
-	store := NewStore()
+	store := NewStore("blog.db")
+	defer store.Close()
 	handlers := NewHandlers(store)
 
 	mux := http.NewServeMux()

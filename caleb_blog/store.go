@@ -1,77 +1,114 @@
 package main
 
 import (
-	"sync"
+	"database/sql"
+	"log"
 	"time"
+
+	_ "modernc.org/sqlite"
 )
 
-// Store provides thread-safe in-memory storage for posts
+// Store provides persistent SQLite storage for posts
 type Store struct {
-	mu     sync.RWMutex
-	posts  map[int]*Post
-	nextID int
+	db *sql.DB
 }
 
-// NewStore creates a new in-memory store
-func NewStore() *Store {
-	return &Store{
-		posts:  make(map[int]*Post),
-		nextID: 1,
+// NewStore creates a new SQLite-backed store
+func NewStore(dbPath string) *Store {
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		log.Fatal(err)
 	}
+
+	// Create posts table if it doesn't exist
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS posts (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			title TEXT NOT NULL,
+			content TEXT NOT NULL,
+			created_at DATETIME NOT NULL
+		)
+	`)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return &Store{db: db}
+}
+
+// Close closes the database connection
+func (s *Store) Close() error {
+	return s.db.Close()
 }
 
 // Create adds a new post and returns its ID
 func (s *Store) Create(title, content string) int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	post := &Post{
-		ID:        s.nextID,
-		Title:     title,
-		Content:   content,
-		CreatedAt: time.Now(),
+	result, err := s.db.Exec(
+		"INSERT INTO posts (title, content, created_at) VALUES (?, ?, ?)",
+		title, content, time.Now(),
+	)
+	if err != nil {
+		log.Printf("Error creating post: %v", err)
+		return 0
 	}
-	s.posts[s.nextID] = post
-	s.nextID++
-	return post.ID
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		log.Printf("Error getting last insert ID: %v", err)
+		return 0
+	}
+	return int(id)
 }
 
 // Get retrieves a post by ID, returns nil if not found
 func (s *Store) Get(id int) *Post {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.posts[id]
+	row := s.db.QueryRow(
+		"SELECT id, title, content, created_at FROM posts WHERE id = ?",
+		id,
+	)
+
+	var post Post
+	err := row.Scan(&post.ID, &post.Title, &post.Content, &post.CreatedAt)
+	if err != nil {
+		return nil
+	}
+	return &post
 }
 
 // List returns all posts sorted by creation time (newest first)
 func (s *Store) List() []*Post {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	posts := make([]*Post, 0, len(s.posts))
-	for _, p := range s.posts {
-		posts = append(posts, p)
+	rows, err := s.db.Query(
+		"SELECT id, title, content, created_at FROM posts ORDER BY created_at DESC",
+	)
+	if err != nil {
+		log.Printf("Error listing posts: %v", err)
+		return nil
 	}
+	defer rows.Close()
 
-	// Sort by CreatedAt descending (newest first)
-	for i := 0; i < len(posts)-1; i++ {
-		for j := i + 1; j < len(posts); j++ {
-			if posts[j].CreatedAt.After(posts[i].CreatedAt) {
-				posts[i], posts[j] = posts[j], posts[i]
-			}
+	var posts []*Post
+	for rows.Next() {
+		var post Post
+		if err := rows.Scan(&post.ID, &post.Title, &post.Content, &post.CreatedAt); err != nil {
+			log.Printf("Error scanning post: %v", err)
+			continue
 		}
+		posts = append(posts, &post)
 	}
 	return posts
 }
 
 // Delete removes a post by ID, returns true if deleted
 func (s *Store) Delete(id int) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if _, exists := s.posts[id]; exists {
-		delete(s.posts, id)
-		return true
+	result, err := s.db.Exec("DELETE FROM posts WHERE id = ?", id)
+	if err != nil {
+		log.Printf("Error deleting post: %v", err)
+		return false
 	}
-	return false
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false
+	}
+	return affected > 0
 }
